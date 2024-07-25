@@ -1,0 +1,15 @@
+[project]
+name = "styleshot-comfyui"
+description = "a custom node for [a/StyleShot](https://github.com/open-mmlab/StyleShot.git)"
+version = "1.0.0"
+license = {file = "LICENSE"}
+dependencies = ["jmespath", "python-dateutil", "diffusers", "transformers", "accelerate", "opencv-python", "einops", "botocore", "# basicsr"]
+
+[project.urls]
+Repository = "https://github.com/AIFSH/StyleShot-ComfyUI"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "StyleShot-ComfyUI"
+Icon = ""
