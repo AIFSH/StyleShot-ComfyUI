@@ -1,0 +1,9 @@
+jmespath
+python-dateutil
+diffusers
+transformers
+accelerate
+opencv-python
+einops
+botocore
+# basicsr
