@@ -18,7 +18,9 @@ device = "cuda" if cuda_malloc.cuda_malloc_supported() else "cpu"
 
 
 
-def load_weights(use_case="text_driven",preprocessor = "Contour"):
+def load_weights(use_case="text_driven",preprocessor = "Contour",seed=42):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     base_model_path = "runwayml/stable-diffusion-v1-5"
     transformer_block_path = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
     
@@ -33,7 +35,7 @@ def load_weights(use_case="text_driven",preprocessor = "Contour"):
 
     if not os.path.isdir(base_model_path):
         base_model_path = snapshot_download(base_model_path,
-                                            allow_patterns=["*.fp16.safetensors","*.json"],
+                                            allow_patterns=["*fp16.safetensors","*.json","*yaml","*.txt"],
                                             local_dir=os.path.join(prtrained_dir,base_model_path.split("/")[-1]))
         print(f"Downloaded model to {base_model_path}")
     if not os.path.isdir(transformer_block_path):
@@ -51,13 +53,13 @@ def load_weights(use_case="text_driven",preprocessor = "Contour"):
     style_aware_encoder_path = os.path.join(styleshot_model_path, "pretrained_weight/style_aware_encoder.bin")
 
     if use_case == "text_driven":
-        pipe = StableDiffusionPipeline.from_pretrained(base_model_path,use_safetensors=True,variant="fp16")
+        pipe = StableDiffusionPipeline.from_pretrained(base_model_path,variant="fp16")
         styleshot = StyleShot(device, pipe, ip_ckpt, style_aware_encoder_path, transformer_block_path)
     if use_case == "image_driven":
         unet = UNet2DConditionModel.from_pretrained(base_model_path, subfolder="unet",variant="fp16")
         content_fusion_encoder = ControlNetModel.from_unet(unet)
         
-        pipe = StyleContentStableDiffusionControlNetPipeline.from_pretrained(base_model_path,use_safetensors=True,controlnet=content_fusion_encoder)
+        pipe = StyleContentStableDiffusionControlNetPipeline.from_pretrained(base_model_path,variant="fp16",controlnet=content_fusion_encoder)
         styleshot = StyleShot(device, pipe, ip_ckpt, style_aware_encoder_path, transformer_block_path)
 
     if use_case == "t2i-adapter":
@@ -68,7 +70,7 @@ def load_weights(use_case="text_driven",preprocessor = "Contour"):
                                                    local_dir=os.path.join(prtrained_dir,adapter_model_path.split("/")[-1]))
             print(f"Downloaded model to {adapter_model_path}")
         adapter = T2IAdapter.from_pretrained(adapter_model_path, torch_dtype=torch.float16)
-        pipe = StableDiffusionAdapterPipeline.from_pretrained(base_model_path, adapter=adapter,use_safetensors=True,variant="fp16")
+        pipe = StableDiffusionAdapterPipeline.from_pretrained(base_model_path, adapter=adapter,variant="fp16")
     
         styleshot = StyleShot(device, pipe, ip_ckpt, style_aware_encoder_path, transformer_block_path)
     
@@ -80,7 +82,7 @@ def load_weights(use_case="text_driven",preprocessor = "Contour"):
                                                       local_dir=os.path.join(prtrained_dir,controlnet_model_path.split("/")[-1]))
             print(f"Downloaded model to {controlnet_model_path}")
         controlnet = ControlNetModel.from_pretrained(controlnet_model_path, torch_dtype=torch.float16)
-        pipe = StableDiffusionControlNetPipeline.from_pretrained(base_model_path, controlnet=controlnet,use_safetensors=True,variant="fp16")
+        pipe = StableDiffusionControlNetPipeline.from_pretrained(base_model_path, controlnet=controlnet,variant="fp16")
     
         styleshot = StyleShot(device, pipe, ip_ckpt, style_aware_encoder_path, transformer_block_path)
     
@@ -108,7 +110,10 @@ class StyleShotNode:
             "required":{
                 "style":("IMAGE",),
                 "prompt":("TEXT",),
-                "use_case":(["text_driven","image_driven","controlnet","t2i-adapter"],)
+                "use_case":(["text_driven","image_driven","controlnet","t2i-adapter"],),
+                "seed":("INT",{
+                    "default":42
+                })
             },
             "optional":{
                 "content":("IMAGE",),
@@ -132,11 +137,12 @@ class StyleShotNode:
         image = Image.fromarray(image_np)
         return image
 
-    def generate(self,style,prompt,use_case,
+    def generate(self,style,prompt,use_case,seed,
                  content=None,preprocessor="Contour",condition=None):
         if self.use_case != use_case:
             self.use_case = use_case
-            self.styleshot = load_weights(self.use_case,preprocessor)
+            self.styleshot = load_weights(self.use_case,preprocessor,seed)
+            torch.cuda.empty_cache()
         style_image = self.comfyimage2Image(style)
         if self.use_case == "image_driven":
             annotator_ckpts_path = os.path.join(prtrained_dir,"Annotators")
@@ -150,18 +156,20 @@ class StyleShotNode:
                 detector = SOFT_HEDdetector(annotator_ckpts_path)
             
             content_image = self.comfyimage2Image(content)
-            content_image = cv2.cvtColor(content_image, cv2.COLOR_BGR2RGB)
+            content_image = cv2.cvtColor(np.asarray(content_image), cv2.COLOR_BGR2RGB)
             content_image = detector(content_image)
             content_image = Image.fromarray(content_image)
     
         else:
             content_image = None
         
+        negative_prompt = "nsfw,bare,naked"
         if use_case in ["t2i-adapter","controlnet"]:
             condition_image = self.comfyimage2Image(condition)
-            generation = self.styleshot.generate(style_image=style_image, prompt=[[prompt]], image=[condition_image])
+            generation = self.styleshot.generate(style_image=style_image, prompt=[[prompt]],negative_prompt=negative_prompt, image=[condition_image])
         else:
-            generation = self.styleshot.generate(style_image=style_image, prompt=[[prompt]],content_image=content_image)
+            generation = self.styleshot.generate(style_image=style_image, prompt=[[prompt]],negative_prompt=negative_prompt,content_image=content_image)
+        # generation[0][0].save("test.png")
         out_image = torch.from_numpy(np.array(generation[0][0]) / 255.0).unsqueeze(0)
         return (out_image,)
 
